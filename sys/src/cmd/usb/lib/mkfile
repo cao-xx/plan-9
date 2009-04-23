@@ -1,0 +1,22 @@
+</$objtype/mkfile
+
+LIB=usb.a$O
+OFILES=\
+	device.$O\
+	dump.$O\
+	fmt.$O\
+	setup.$O\
+	util.$O\
+
+HFILES=\
+	usb.h\
+
+UPDATE=\
+	$HFILES\
+	${OFILES:%.$O=%.c}\
+	mkfile\
+
+</sys/src/cmd/mklib
+
+install:V:	$LIB
+	date

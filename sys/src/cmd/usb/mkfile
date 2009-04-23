@@ -1,0 +1,29 @@
+</$objtype/mkfile
+
+DIRS=\
+	lib\
+	audio\
+	disk\
+	kb\
+	misc\
+	usbd\
+
+UPDATE=\
+	mkfile\
+
+none:VQ:
+	echo mk all, install, installall, clean, nuke, or update
+
+all install installall clean nuke:VQ:
+	for (i in $DIRS) @{
+		cd $i
+		mk $target
+	}
+
+update:V:
+	update $UPDATEFLAGS $UPDATE
+	for (i in $DIRS) @{
+		echo update $i
+		cd $i
+		mk 'UPDATEFLAGS='$"UPDATEFLAGS update
+	}

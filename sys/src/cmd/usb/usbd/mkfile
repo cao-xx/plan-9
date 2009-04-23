@@ -1,0 +1,30 @@
+</$objtype/mkfile
+
+TARG=usbd
+OFILES=\
+	hub.$O\
+	setup.$O\
+	usbd.$O\
+
+HFILES=\
+	dat.h\
+	fns.h\
+	../lib/usb.h\
+
+LIB=../lib/usb.a$O
+
+UPDATE=\
+	$HFILES\
+	${OFILES:%.$O=%.c}\
+	mkfile\
+	/sys/man/3/usb\
+
+BIN=/$objtype/bin/usb
+</sys/src/cmd/mkone
+
+CFLAGS=-I../lib $CFLAGS
+
+$LIB:
+	cd ../lib
+	mk install
+	mk clean

@@ -1,0 +1,39 @@
+#!/bin/rc
+switch($1){
+case ''
+	echo usage: 9fs service '[mountpoint]' >[1=2]
+	exit usage
+case kfs
+	if(! test -f /srv/kfs)
+		disk/kfs
+	mount -c /srv/kfs /n/kfs
+case netlib
+	9fs netlib2 && bind /n/netlib2/netlib /netlib
+case dump
+	mount /srv/boot /n/dump dump >[2]/dev/null ||
+	mount /srv/boot /n/dump main/archive ||
+	mount /srv/boot /n/dump dump	# again to print error
+case snap
+	mount /srv/boot /n/snap main/snapshot
+case other
+	mount -C /srv/boot /n/other other
+case juke
+	srv -q il!jukefs && mount /srv/il!jukefs /n/njuke && bind -c /n/njuke/juke /n/juke
+case sources
+	srv -nq tcp!sources.cs.bell-labs.com sources /n/sources
+case sourcesdump
+	9fs sources
+	mount -n /srv/sources /n/sourcesdump main/archive
+case sourcessnap
+	9fs sources
+	mount -n /srv/sources /n/sourcessnap main/snapshot
+case wiki
+	srv -m 'net!plan9.bell-labs.com!wiki' wiki /mnt/wiki
+case *
+	switch($#*){
+	case 1
+		srv -m $1
+	case *
+		srv -m $1 $1 $2
+	}
+}

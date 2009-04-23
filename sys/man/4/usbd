@@ -1,0 +1,55 @@
+.TH USBD 4
+.SH NAME
+usbd \- Universal Serial Bus daemon
+.SH SYNOPSIS
+.B usbd
+[
+.B -DfV
+] [
+.B -d
+.I bitmask
+] [
+.B -u
+.I root-hub-num
+]
+.SH DESCRIPTION
+.I Usbd
+manages the USB infrastructure, polls all ports, configures hubs and
+provides access to USB devices through a file system in
+.BR #U .
+It monitors all ports, active or inactive and acts on state changes
+by configuring devices when they are plugged in or turned on and
+unconfiguring them when they are pulled out or switched off.
+.PP
+.B Usbd
+recognizes the following options:
+.TP
+.B d
+Set USB library debugging option
+.IR bitmask .
+A value of 1 sets
+.BI Dbginfo ,
+2 sets
+.BI Dbgfs ,
+4 sets
+.BI Dbgproc ,
+and 8 sets
+.BI Dbgcontrol ;
+they may be added to set multiple options.
+.TP
+.B D
+Debug; print the bytes in each message sent or received.
+.TP
+.B f
+Don't fork.
+.TP
+.B u
+Specifies the controller number of the root hub.
+.TP
+.B V
+Verbose; print configuration information and device status as they change.
+.SH SOURCE
+.B /sys/src/cmd/usb/usbd
+.SH "SEE ALSO"
+.IR usb (3),
+.IR usb (4)
