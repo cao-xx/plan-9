@@ -4,26 +4,35 @@ DIRS=\
 	lib\
 	audio\
 	disk\
+	ether\
 	kb\
-	misc\
+	print\
+	serial\
 	usbd\
 
 UPDATE=\
 	mkfile\
 
-none:VQ:
-	echo mk all, install, installall, clean, nuke, or update
+default:V: all
 
-all install installall clean nuke:VQ:
+none:VQ:
+	echo mk all, install, installall, safeinstall, safeinstallall, clean, nuke, or update
+
+all clean nuke:VQ:
 	for (i in $DIRS) @{
-		cd $i
-		mk $target
+		cd $i && mk $target
 	}
+
+install installall safeinstall safeinstallall:V:
+	for (i in $DIRS) @{
+		cd $i && mk $target
+	}
+	cp usbfat: /rc/bin
+	cp probe /$objtype/bin/usb/probe
 
 update:V:
 	update $UPDATEFLAGS $UPDATE
 	for (i in $DIRS) @{
 		echo update $i
-		cd $i
-		mk 'UPDATEFLAGS='$"UPDATEFLAGS update
+		cd $i && mk 'UPDATEFLAGS='$"UPDATEFLAGS update
 	}
