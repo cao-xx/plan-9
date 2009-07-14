@@ -117,16 +117,21 @@ typedef struct Opthdr	Opthdr;
 typedef struct Routinghdr Routinghdr;
 typedef struct Fraghdr6	Fraghdr6;
 
+/* we do this in case there's padding at the end of Ip6hdr */
+#define IPV6HDR \
+	uchar	vcf[4];		/* version:4, traffic class:8, flow label:20 */\
+	uchar	ploadlen[2];	/* payload length: packet length - 40 */ \
+	uchar	proto;		/* next header type */ \
+	uchar	ttl;		/* hop limit */ \
+	uchar	src[IPaddrlen]; \
+	uchar	dst[IPaddrlen]
+
 struct	Ip6hdr {
-	uchar	vcf[4];		/* version:4, traffic class:8, flow label:20 */
-	uchar	ploadlen[2];	/* payload length: packet length - 40 */
-	uchar	proto;		/* next header type */
-	uchar	ttl;		/* hop limit */
-	uchar	src[IPaddrlen];
-	uchar	dst[IPaddrlen];
+	IPV6HDR;
+	uchar	payload[];
 };
 
-struct	Opthdr {
+struct	Opthdr {		/* unused */
 	uchar	nexthdr;
 	uchar	len;
 };
@@ -137,7 +142,7 @@ struct	Opthdr {
  * Type 1 is unused.  Type 2 is for MIPv6 (mobile IPv6) filtering
  * against type 0 header.
  */
-struct	Routinghdr {
+struct	Routinghdr {		/* unused */
 	uchar	nexthdr;
 	uchar	len;
 	uchar	rtetype;
