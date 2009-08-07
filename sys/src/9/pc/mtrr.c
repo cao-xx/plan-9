@@ -1,12 +1,17 @@
+/*
+ * memory-type region registers.
+ *
+ * due to the possibility of extended addresses (for PAE)
+ * as large as 36 bits coming from the e820 memory map and the like,
+ * we'll use vlongs to hold addresses and lengths, even though we don't
+ * implement PAE in Plan 9.
+ */
 #include "u.h"
 #include "../port/lib.h"
 #include "mem.h"
 #include "dat.h"
 #include "fns.h"
 #include "io.h"
-
-typedef struct Mtrreg Mtrreg;
-typedef struct Mtrrop Mtrrop;
 
 enum {
 	/*
@@ -17,6 +22,7 @@ enum {
 	MTRRPhysMask0 = 0x201,
 	MTRRDefaultType = 0x2FF,
 	MTRRCap = 0xFE,
+	Nmtrr = 8,
 
 	/* cpuid extended function codes */
 	Exthighfunc = 1ul << 31,
@@ -28,6 +34,8 @@ enum {
 	Extl2,
 	Extapm,
 	Extaddrsz,
+
+	Paerange = 1LL << 36,
 };
 
 enum {
@@ -54,6 +62,9 @@ enum {
 	Defena	= 1<<11,	/* MTRR enable */
 };
 
+typedef struct Mtrreg Mtrreg;
+typedef struct Mtrrop Mtrrop;
+
 struct Mtrreg {
 	vlong	base;
 	vlong	mask;
@@ -73,6 +84,8 @@ static char *types[] = {
 [Writeback]	"wb",
 		nil
 };
+static Mtrrop *postedop;
+static Rendez oprend;
 
 static char *
 type2str(int type)
@@ -93,50 +106,43 @@ str2type(char *str)
 	return -1;
 }
 
-static vlong
+static uvlong
 physmask(void)
 {
 	ulong regs[4];
+	static vlong mask = -1;
 
+	if (mask != -1)
+		return mask;
+	mask = Paerange - 1;				/* default */
 	cpuid(Exthighfunc, regs);
-	if(regs[0] < Extaddrsz)			/* ax */
-		return (1ULL << 36) - 1;	/* cpu does not tell */
-
-	cpuid(Extaddrsz, regs);
-	return (1LL << (regs[0] & 0xFF)) - 1;	/* ax */
+	if(regs[0] >= Extaddrsz) {			/* ax */
+		cpuid(Extaddrsz, regs);
+		mask = (1LL << (regs[0] & 0xFF)) - 1;	/* ax */
+		if (mask >= Paerange)
+			mask = Paerange - 1;
+	}
+	return mask;
 }
 
 static int
-overlap(uintptr b1, long s1, uintptr b2, long s2)
-{
-	if(b1 > b2)
-		return overlap(b2, s2, b1, s1);
-	if(b1 + s1 > b2)
-		return 1;
-	return 0;
-}
-
-static int
-ispow2(ulong ul)
+ispow2(uvlong ul)
 {
 	return (ul & (ul - 1)) == 0;
 }
 
-static void
-mtrrdec(Mtrreg *mtrr, uintptr *ptr, long *size, int *type, int *ok)
+/* true if mtrr is valid */
+static int
+mtrrdec(Mtrreg *mtrr, uvlong *ptr, uvlong *size, int *type)
 {
-	if(ptr != nil)
-		*ptr = mtrr->base & ~(BY2PG-1);
-	if(type != nil)
-		*type = mtrr->base & 0xff;
-	if(size != nil)
-		*size = (physmask() ^ (mtrr->mask & ~(BY2PG-1))) + 1;
-	if(ok != nil)
-		*ok = (mtrr->mask >> 11) & 1;
+	*ptr =  mtrr->base & ~(BY2PG-1);
+	*type = mtrr->base & 0xff;
+	*size = (physmask() ^ (mtrr->mask & ~(BY2PG-1))) + 1;
+	return (mtrr->mask >> 11) & 1;
 }
 
 static void
-mtrrenc(Mtrreg *mtrr, uintptr ptr, long size, int type, int ok)
+mtrrenc(Mtrreg *mtrr, uvlong ptr, uvlong size, int type, int ok)
 {
 	mtrr->base = ptr | (type & 0xff);
 	mtrr->mask = (physmask() & ~(size - 1)) | (ok? 1<<11: 0);
@@ -147,15 +153,19 @@ mtrrenc(Mtrreg *mtrr, uintptr ptr, long size, int type, int ok)
  * mask and base offsets are interleaved.
  */
 static void
-mtrrget(Mtrreg *mtrr, int i)
+mtrrget(Mtrreg *mtrr, uint i)
 {
+	if (i >= Nmtrr)
+		error("mtrr index out of range");
 	rdmsr(MTRRPhysBase0 + 2*i, &mtrr->base);
 	rdmsr(MTRRPhysMask0 + 2*i, &mtrr->mask);
 }
 
 static void
-mtrrput(Mtrreg *mtrr, int i)
+mtrrput(Mtrreg *mtrr, uint i)
 {
+	if (i >= Nmtrr)
+		error("mtrr index out of range");
 	wrmsr(MTRRPhysBase0 + 2*i, mtrr->base);
 	wrmsr(MTRRPhysMask0 + 2*i, mtrr->mask);
 }
@@ -169,8 +179,6 @@ mtrrop(Mtrrop **op)
 	static long bar1, bar2;
 
 	s = splhi();		/* avoid race with mtrrclock */
-
-// iprint("cpu%d enter mtrrop\n", m->machno);
 
 	/*
 	 * wait for all CPUs to sync here, so that the MTRR setup gets
@@ -208,10 +216,9 @@ mtrrop(Mtrrop **op)
 	while(bar1 > 0)
 		microdelay(10);
 	_xdec(&bar2);
+	wakeup(&oprend);
 	splx(s);
 }
-
-static Mtrrop *postedop;
 
 void
 mtrrclock(void)				/* called from clock interrupt */
@@ -220,22 +227,30 @@ mtrrclock(void)				/* called from clock interrupt */
 		mtrrop(&postedop);
 }
 
-int
-mtrr(uintptr base, long size, char *tstr)
+/* if there's an operation still pending, keep sleeping */
+static int
+opavail(void *)
 {
-	int i, vcnt, slot, type;
+	return postedop == nil;
+}
+
+int
+mtrr(uvlong base, uvlong size, char *tstr)
+{
+	int i, vcnt, slot, type, mtype, mok;
 	vlong def, cap;
-	Mtrreg entry;
+	uvlong mp, msize;
+	Mtrreg entry, mtrr;
 	Mtrrop op;
 	static int tickreg;
 	static QLock mtrrlk;
 
 	if(!(m->cpuiddx & Mtrr))
-		error("mtrr not supported");
-	if(base & (BY2PG-1) || size & (BY2PG-1) || size <= 0)
-		error("mtrr base or size not 4k aligned or size <= 0");
-	if(base + size < base)
-		error("mtrr range exceeds 4G");
+		error("mtrrs not supported");
+	if(base & (BY2PG-1) || size & (BY2PG-1) || size == 0)
+		error("mtrr base or size not 4k aligned or zero size");
+	if(base + size >= Paerange)
+		error("mtrr range exceeds 36 bits");
 	if(!ispow2(size))
 		error("mtrr size not power of 2");
 	if(base & (size - 1))
@@ -262,28 +277,23 @@ mtrr(uintptr base, long size, char *tstr)
 		break;
 	}
 
+	qlock(&mtrrlk);
 	slot = -1;
 	vcnt = cap & Capvcnt;
 	for(i = 0; i < vcnt; i++){
-		int mtype, mok;
-		long msize;
-		uintptr mp;
-		Mtrreg mtrr;
-
 		mtrrget(&mtrr, i);
-		mtrrdec(&mtrr, &mp, &msize, &mtype, &mok);
-		if(!mok)
-			slot = i;
-		else if(mp == base && msize == size){
+		mok = mtrrdec(&mtrr, &mp, &msize, &mtype);
+		/* reuse any entry for memory above 4GB */
+		if(!mok || mp == base && msize == size || mp >= (1LL<<32)){
 			slot = i;
 			break;
 		}
-		if(mok && overlap(mp, msize, base, size))
-			error("mtrr range overlaps existing definition");
 	}
 	if(slot == -1)
 		error("no free mtrr slots");
-	qlock(&mtrrlk);
+
+	while(postedop != nil)
+		sleep(&oprend, opavail, 0);
 	mtrrenc(&entry, base, size, type, 1);
 	op.reg = &entry;
 	op.slot = slot;
@@ -296,8 +306,9 @@ mtrr(uintptr base, long size, char *tstr)
 int
 mtrrprint(char *buf, long bufsize)
 {
-	int i, vcnt;
+	int i, vcnt, type;
 	long n;
+	uvlong base, size;
 	vlong cap, def;
 	Mtrreg mtrr;
 
@@ -310,14 +321,10 @@ mtrrprint(char *buf, long bufsize)
 		type2str(def & Deftype));
 	vcnt = cap & Capvcnt;
 	for(i = 0; i < vcnt; i++){
-		int type, ok;
-		long size;
-		uintptr base;
-
 		mtrrget(&mtrr, i);
-		mtrrdec(&mtrr, &base, &size, &type, &ok);
-		if(ok)
-			n += snprint(buf+n, bufsize-n, "cache 0x%lux %lud %s\n",
+		if (mtrrdec(&mtrr, &base, &size, &type))
+			n += snprint(buf+n, bufsize-n,
+				"cache 0x%llux %llud %s\n",
 				base, size, type2str(type));
 	}
 	return n;
