@@ -16,7 +16,7 @@
 enum {
 	/*
 	 * MTRR Physical base/mask are indexed by
-	 *	MTRRPhys{Base|Mask}N = MTRRPhys{Base|Mask}0 + 2*i
+	 *	MTRRPhys{Base|Mask}N = MTRRPhys{Base|Mask}0 + 2*N
 	 */
 	MTRRPhysBase0 = 0x200,
 	MTRRPhysMask0 = 0x201,
@@ -114,15 +114,21 @@ physmask(void)
 
 	if (mask != -1)
 		return mask;
-	mask = Paerange - 1;				/* default */
 	cpuid(Exthighfunc, regs);
 	if(regs[0] >= Extaddrsz) {			/* ax */
 		cpuid(Extaddrsz, regs);
 		mask = (1LL << (regs[0] & 0xFF)) - 1;	/* ax */
-		if (mask >= Paerange)
-			mask = Paerange - 1;
 	}
+	mask &= Paerange - 1;				/* x86 sanity */
 	return mask;
+}
+
+/* limit physical addresses to 36 bits on the x86 */
+static void
+sanity(Mtrreg *mtrr)
+{
+	mtrr->base &= Paerange - 1;
+	mtrr->mask &= Paerange - 1;
 }
 
 static int
@@ -135,6 +141,7 @@ ispow2(uvlong ul)
 static int
 mtrrdec(Mtrreg *mtrr, uvlong *ptr, uvlong *size, int *type)
 {
+	sanity(mtrr);
 	*ptr =  mtrr->base & ~(BY2PG-1);
 	*type = mtrr->base & 0xff;
 	*size = (physmask() ^ (mtrr->mask & ~(BY2PG-1))) + 1;
@@ -146,6 +153,7 @@ mtrrenc(Mtrreg *mtrr, uvlong ptr, uvlong size, int type, int ok)
 {
 	mtrr->base = ptr | (type & 0xff);
 	mtrr->mask = (physmask() & ~(size - 1)) | (ok? 1<<11: 0);
+	sanity(mtrr);
 }
 
 /*
@@ -159,6 +167,7 @@ mtrrget(Mtrreg *mtrr, uint i)
 		error("mtrr index out of range");
 	rdmsr(MTRRPhysBase0 + 2*i, &mtrr->base);
 	rdmsr(MTRRPhysMask0 + 2*i, &mtrr->mask);
+	sanity(mtrr);
 }
 
 static void
@@ -166,6 +175,7 @@ mtrrput(Mtrreg *mtrr, uint i)
 {
 	if (i >= Nmtrr)
 		error("mtrr index out of range");
+	sanity(mtrr);
 	wrmsr(MTRRPhysBase0 + 2*i, mtrr->base);
 	wrmsr(MTRRPhysMask0 + 2*i, mtrr->mask);
 }
@@ -283,7 +293,7 @@ mtrr(uvlong base, uvlong size, char *tstr)
 	for(i = 0; i < vcnt; i++){
 		mtrrget(&mtrr, i);
 		mok = mtrrdec(&mtrr, &mp, &msize, &mtype);
-		/* reuse any entry for memory above 4GB */
+		/* reuse any entry for addresses above 4GB */
 		if(!mok || mp == base && msize == size || mp >= (1LL<<32)){
 			slot = i;
 			break;
